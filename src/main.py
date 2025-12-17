@@ -19,7 +19,7 @@ import speech_recognition as sr
 from rapidfuzz import fuzz
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-COOLDOWN_SECONDS=1.5
+COOLDOWN_SECONDS=0.3
 
 # wsg chat, disclaimer: with the assist of Claude I was able to make this easily. Anything that looks odd is cause ts was written with AI however is fully functional. Edit how you want.
 
@@ -59,15 +59,17 @@ def matches_trigger_phrase(txt):
     # triggers, change how you want the macro to be triggered
     triggers = [
         "start the macro",
-        'start macro', 
+        'start the mackarel', # i got a UK accent gng 😭
         "launch macro",
         "fire up the macro",
         'start adrenalin'
     ]
+
+    fuzz_thres = 85  # 85 seems best, lower = more false positives but is flexible on the triggers, higher = more strict, the number you see when you speak in the console is the threshold value.
     
     for trigger in triggers:
         score = fuzz.partial_ratio(txt, trigger)
-        if score >= 80:  # 80 seems best, lower = more false positives but is flexible on the triggers, higher = more strict
+        if score >= fuzz_thres:
             print(f"[MATCH] '{txt}' ≈ '{trigger}' ({score})")
             return True
     
@@ -78,13 +80,13 @@ def listen_for_speech():
     
     recognizer=sr.Recognizer()
     
-    recognizer.energy_threshold = 300
-    recognizer.dynamic_energy_threshold=True
-    recognizer.dynamic_energy_adjustment_damping = 0.5
-    recognizer.dynamic_energy_ratio=1.5
-    recognizer.pause_threshold = 0.8
-    recognizer.phrase_threshold=0.3
-    recognizer.non_speaking_duration = 0.5
+    recognizer.energy_threshold = 50
+    recognizer.dynamic_energy_threshold = True
+    recognizer.dynamic_energy_adjustment_damping = 0.35
+    recognizer.dynamic_energy_ratio = 1.4
+    recognizer.pause_threshold = 0.5
+    recognizer.phrase_threshold = 0.2
+    recognizer.non_speaking_duration = 0.3
     
     with sr.Microphone(sample_rate=16000) as mic:
         import pyaudio
@@ -98,11 +100,11 @@ def listen_for_speech():
         print(f' OK ({mic_name})')
         
         print('Calibrating microphone...', end='', flush=True)
-        recognizer.adjust_for_ambient_noise(mic, duration=3)
+        recognizer.adjust_for_ambient_noise(mic, duration=4)
         print(' OK')
         
         while is_listening:
-            audio = recognizer.listen(mic, timeout=None, phrase_time_limit=10)
+            audio = recognizer.listen(mic, timeout=None, phrase_time_limit=8)
             threading.Thread(target=process_audio, args=(audio,), daemon=True).start()
 
 def process_audio(audio):
