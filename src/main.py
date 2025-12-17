@@ -87,16 +87,16 @@ def listen_for_speech():
         import pyaudio
         p = pyaudio.PyAudio()
         
+        print('Detecting microphone...', end='', flush=True)
         device_idx = mic.device_index if mic.device_index else p.get_default_input_device_info()['index']
         device_info=p.get_device_info_by_index(device_idx)
         mic_name = device_info['name']
         p.terminate()
+        print(f' OK ({mic_name})')
         
-        print(f"Listening to: {mic_name}")
-        
-        print('Calibrating microphone...')
+        print('Calibrating microphone...', end='', flush=True)
         recognizer.adjust_for_ambient_noise(mic, duration=2)
-        print("Calibrated microphone.")
+        print(' OK')
         
         while is_listening:
             audio = recognizer.listen(mic, timeout=None, phrase_time_limit=10)
@@ -127,13 +127,15 @@ def is_app_running():
 def launch_app():
     global last_trigger_time
     
+    print('Launching Adrenalin...', end='', flush=True)
+    
     if is_app_running():
-        print("Launching Adrenalin... ERR: App already running, skipping launch")
+        print(' ERR: App already running, skipping launch')
         ctypes.windll.user32.MessageBeep(0x10)
         return
     
+    print(' OK')
     def do_launch():
-        print('Launching Adrenalin... OK')
         subprocess.Popen([APP_PATH, "-disableshowonstart"],
                        creationflags=0x08)  # needed for detaching
     
