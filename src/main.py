@@ -8,7 +8,6 @@ import queue
 import winreg
 import json
 import pyaudio
-import struct
 
 try:
     import pystray
@@ -27,7 +26,6 @@ tray_icon = None
 last_trigger_time=0.0
 is_listening = True
 vosk_model = None
-energy_threshold = 300
 
 def get_app_path():
     key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'Software\Adrenalin')
@@ -57,42 +55,19 @@ def init_vosk():
     vosk_model=Model(model_path)
     print(' OK')
 
-def calc_rms(data):
-    count = len(data)//2
-    fmt = f"{count}h"
-    shorts = struct.unpack(fmt, data)
-    sum_sq = sum(s**2 for s in shorts)
-    rms = (sum_sq/count)**0.5
-    return int(rms)
-
-def calibrate_mic(stream):
-    global energy_threshold
-    
-    print('Calibrating microphone...', end='', flush=True)
-    
-    samples=[]
-    for _ in range(50):
-        data = stream.read(2000, exception_on_overflow=False)
-        rms=calc_rms(data)
-        samples.append(rms)
-        time.sleep(0.01)
-    
-    avg_ambient = sum(samples) / len(samples)
-    energy_threshold = avg_ambient * 2.8
-    
-    if energy_threshold<250:
-        energy_threshold=250
-    if energy_threshold>2500:
-        energy_threshold=2500
-    
-    print(f' OK (threshold: {int(energy_threshold)})')
-
 def matches_trigger(txt):
     if not txt:
         return False
     
+    if len(txt.split()) < 2:
+        return False
+    
+    noise_words = {"the", "a", "and", "to", "is", "it", "that", "this", "for", "with"}
+    if txt.lower() in noise_words:
+        return False
+    
     txt_lower=txt.lower()
-    if not any(word in txt_lower for word in ["start", "launch", 'fire', "adrenalin", "macro", 'mackarel']): # pretty sure this is redundant, but just in case.
+    if not any(word in txt_lower for word in ["start", "launch", 'fire', "adrenalin", "macro", 'mackarel']):
         return False
     
     triggers=[
@@ -115,7 +90,7 @@ def matches_trigger(txt):
     return False
 
 def listen_for_speech():
-    global last_trigger_time, energy_threshold
+    global last_trigger_time
     
     p=pyaudio.PyAudio()
     
@@ -129,72 +104,28 @@ def listen_for_speech():
                    channels=1,
                    rate=16000,
                    input=True,
-                   frames_per_buffer=2000)
-    stream.start_stream()
-    
-    calibrate_mic(stream)
+                   frames_per_buffer=4000)
     
     rec = KaldiRecognizer(vosk_model, 16000)
-    rec.SetMaxAlternatives(0)
     rec.SetWords(False)
     
-    print('Listening...')
-    
-    speech_buffer=[]
-    silence_frames = 0
-    silence_threshold=6
-    is_speaking = False
-    adapt_counter=0
+    print('Status... OK: Listening')
     
     while is_listening:
-        data=stream.read(2000, exception_on_overflow=False)
+        data = stream.read(4000, exception_on_overflow=False)
         
-        rms = calc_rms(data)
-        
-        adapt_counter+=1
-        if adapt_counter>=300:
-            energy_threshold = energy_threshold*0.97 + rms*0.03
-            if energy_threshold<250:
-                energy_threshold = 250
-            if energy_threshold>2500:
-                energy_threshold=2500
-            adapt_counter=0
-        
-        if rms>energy_threshold:
-            is_speaking=True
-            silence_frames = 0
-            speech_buffer.append(data)
-        else:
-            if is_speaking:
-                silence_frames+=1
-                speech_buffer.append(data)
+        if rec.AcceptWaveform(data):
+            result = json.loads(rec.Result())
+            txt = result.get("text", "").strip()
+            
+            if txt:
+                print(f"[HEARD] {txt}")
                 
-                if silence_frames>=silence_threshold:
-                    if len(speech_buffer)>5:
-                        full_audio = b''.join(speech_buffer)
-                        
-                        if rec.AcceptWaveform(full_audio):
-                            result=json.loads(rec.Result())
-                        else:
-                            result = json.loads(rec.FinalResult())
-                        
-                        txt = result.get('text', '').strip()
-                        
-                        if txt:
-                            print(f'[HEARD] {txt}')
-                            
-                            now=time.time()
-                            if now - last_trigger_time>=COOLDOWN_SECONDS:
-                                if matches_trigger(txt):
-                                    launch_app()
-                        
-                        rec=KaldiRecognizer(vosk_model, 16000)
-                        rec.SetMaxAlternatives(0)
-                        rec.SetWords(False)
-                    
-                    speech_buffer=[]
-                    silence_frames = 0
-                    is_speaking=False
+                now = time.time()
+                if now - last_trigger_time >= COOLDOWN_SECONDS:
+                    if matches_trigger(txt):
+                        launch_app()
+                        last_trigger_time = now
     
     stream.stop_stream()
     stream.close()
@@ -209,7 +140,7 @@ def is_app_running():
 def launch_app():
     global last_trigger_time
     
-    print('\nLaunching Adrenalin...', end='', flush=True)
+    print('Launching Adrenalin...', end='', flush=True)
     
     if is_app_running():
         print(' ERR: App already running, skipping launch')
