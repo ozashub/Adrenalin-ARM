@@ -4,9 +4,11 @@ import subprocess
 import threading
 import time
 import ctypes
-from ctypes import wintypes
 import queue
 import winreg
+import json
+import pyaudio
+import struct
 
 try:
     import pystray
@@ -15,18 +17,17 @@ try:
 except:
     HAS_TRAY=False
 
-import speech_recognition as sr
 from rapidfuzz import fuzz
+from vosk import Model, KaldiRecognizer, SetLogLevel
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 COOLDOWN_SECONDS=0.3
 
-# wsg chat, disclaimer: with the assist of Claude I was able to make this easily. Anything that looks odd is cause ts was written with AI however is fully functional. Edit how you want.
-
 tray_icon = None
 last_trigger_time=0.0
 is_listening = True
-audio_q=queue.Queue()
+vosk_model = None
+energy_threshold = 300
 
 def get_app_path():
     key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'Software\Adrenalin')
@@ -44,95 +45,171 @@ APP_PATH=get_app_path()
 if not APP_PATH:
     show_error_and_exit("Could not find Adrenalin. Please launch Adrenalin first to set the location.")
 
-def recognize_speech(audio):
-    recognizer = sr.Recognizer()
-    try:
-        text=recognizer.recognize_google(audio, language="en-US")
-        return text.lower().strip()
-    except (sr.UnknownValueError, sr.RequestError):
-        return None
+def init_vosk():
+    global vosk_model
+    model_path = os.path.join(SCRIPT_DIR, "../dependencies/vosk")
+    
+    if not os.path.exists(model_path):
+        show_error_and_exit(f"Vosk model not found at: {model_path}\nDownload from https://alphacephei.com/vosk/models")
+    
+    SetLogLevel(-1)
+    print('Loading voice model...', end='', flush=True)
+    vosk_model=Model(model_path)
+    print(' OK')
 
-def matches_trigger_phrase(txt):
-    if not txt or ("start" not in txt and "launch" not in txt):
+def calc_rms(data):
+    count = len(data)//2
+    fmt = f"{count}h"
+    shorts = struct.unpack(fmt, data)
+    sum_sq = sum(s**2 for s in shorts)
+    rms = (sum_sq/count)**0.5
+    return int(rms)
+
+def calibrate_mic(stream):
+    global energy_threshold
+    
+    print('Calibrating microphone...', end='', flush=True)
+    
+    samples=[]
+    for _ in range(50):
+        data = stream.read(2000, exception_on_overflow=False)
+        rms=calc_rms(data)
+        samples.append(rms)
+        time.sleep(0.01)
+    
+    avg_ambient = sum(samples) / len(samples)
+    energy_threshold = avg_ambient * 2.8
+    
+    if energy_threshold<250:
+        energy_threshold=250
+    if energy_threshold>2500:
+        energy_threshold=2500
+    
+    print(f' OK (threshold: {int(energy_threshold)})')
+
+def matches_trigger(txt):
+    if not txt:
         return False
     
-    # triggers, change how you want the macro to be triggered
-    triggers = [
+    txt_lower=txt.lower()
+    if not any(word in txt_lower for word in ["start", "launch", 'fire', "adrenalin", "macro", 'mackarel']): # pretty sure this is redundant, but just in case.
+        return False
+    
+    triggers=[
         "start the macro",
-        'start the mackarel', # i got a UK accent gng 😭
+        'start the mackarel',
         "launch macro",
-        "fire up the macro",
-        'start adrenalin'
+        'fire up the macro',
+        'start adrenalin',
+        'open the macro'
     ]
 
-    fuzz_thres = 85  # 85 seems best, lower = more false positives but is flexible on the triggers, higher = more strict, the number you see when you speak in the console is the threshold value.
+    fuzz_thres=85
     
     for trigger in triggers:
-        score = fuzz.partial_ratio(txt, trigger)
-        if score >= fuzz_thres:
+        score=fuzz.partial_ratio(txt, trigger)
+        if score>=fuzz_thres:
             print(f"[MATCH] '{txt}' ≈ '{trigger}' ({score})")
             return True
     
     return False
 
 def listen_for_speech():
-    global last_trigger_time
+    global last_trigger_time, energy_threshold
     
-    recognizer=sr.Recognizer()
+    p=pyaudio.PyAudio()
     
-    recognizer.energy_threshold = 50
-    recognizer.dynamic_energy_threshold = True
-    recognizer.dynamic_energy_adjustment_damping = 0.35
-    recognizer.dynamic_energy_ratio = 1.4
-    recognizer.pause_threshold = 0.5
-    recognizer.phrase_threshold = 0.2
-    recognizer.non_speaking_duration = 0.3
+    print('Detecting microphone...', end='', flush=True)
+    device_idx = p.get_default_input_device_info()['index']
+    device_info=p.get_device_info_by_index(device_idx)
+    mic_name = device_info['name']
+    print(f' OK ({mic_name})')
     
-    with sr.Microphone(sample_rate=16000) as mic:
-        import pyaudio
-        p = pyaudio.PyAudio()
+    stream = p.open(format=pyaudio.paInt16,
+                   channels=1,
+                   rate=16000,
+                   input=True,
+                   frames_per_buffer=2000)
+    stream.start_stream()
+    
+    calibrate_mic(stream)
+    
+    rec = KaldiRecognizer(vosk_model, 16000)
+    rec.SetMaxAlternatives(0)
+    rec.SetWords(False)
+    
+    print('Listening...')
+    
+    speech_buffer=[]
+    silence_frames = 0
+    silence_threshold=6
+    is_speaking = False
+    adapt_counter=0
+    
+    while is_listening:
+        data=stream.read(2000, exception_on_overflow=False)
         
-        print('Detecting microphone...', end='', flush=True)
-        device_idx = mic.device_index if mic.device_index else p.get_default_input_device_info()['index']
-        device_info=p.get_device_info_by_index(device_idx)
-        mic_name = device_info['name']
-        p.terminate()
-        print(f' OK ({mic_name})')
+        rms = calc_rms(data)
         
-        print('Calibrating microphone...', end='', flush=True)
-        recognizer.adjust_for_ambient_noise(mic, duration=4)
-        print(' OK')
+        adapt_counter+=1
+        if adapt_counter>=300:
+            energy_threshold = energy_threshold*0.97 + rms*0.03
+            if energy_threshold<250:
+                energy_threshold = 250
+            if energy_threshold>2500:
+                energy_threshold=2500
+            adapt_counter=0
         
-        while is_listening:
-            audio = recognizer.listen(mic, timeout=None, phrase_time_limit=8)
-            threading.Thread(target=process_audio, args=(audio,), daemon=True).start()
-
-def process_audio(audio):
-    global last_trigger_time
+        if rms>energy_threshold:
+            is_speaking=True
+            silence_frames = 0
+            speech_buffer.append(data)
+        else:
+            if is_speaking:
+                silence_frames+=1
+                speech_buffer.append(data)
+                
+                if silence_frames>=silence_threshold:
+                    if len(speech_buffer)>5:
+                        full_audio = b''.join(speech_buffer)
+                        
+                        if rec.AcceptWaveform(full_audio):
+                            result=json.loads(rec.Result())
+                        else:
+                            result = json.loads(rec.FinalResult())
+                        
+                        txt = result.get('text', '').strip()
+                        
+                        if txt:
+                            print(f'[HEARD] {txt}')
+                            
+                            now=time.time()
+                            if now - last_trigger_time>=COOLDOWN_SECONDS:
+                                if matches_trigger(txt):
+                                    launch_app()
+                        
+                        rec=KaldiRecognizer(vosk_model, 16000)
+                        rec.SetMaxAlternatives(0)
+                        rec.SetWords(False)
+                    
+                    speech_buffer=[]
+                    silence_frames = 0
+                    is_speaking=False
     
-    txt=recognize_speech(audio)
-    if not txt:
-        return
-    
-    print(f"[HEARD] {txt}")
-    
-    now = time.time()
-    if now - last_trigger_time < COOLDOWN_SECONDS:
-        return
-    
-    if matches_trigger_phrase(txt):
-        launch_app()
+    stream.stop_stream()
+    stream.close()
+    p.terminate()
 
 def is_app_running():
-    exe_name = os.path.basename(APP_PATH)
-    result=subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {exe_name}"], 
-                          capture_output=True, text=True, timeout=2)
+    exe_name=os.path.basename(APP_PATH)
+    result = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {exe_name}"], 
+                          capture_output=True, text=True, timeout=1)
     return exe_name.lower() in result.stdout.lower()
 
 def launch_app():
     global last_trigger_time
     
-    print('Launching Adrenalin...', end='', flush=True)
+    print('\nLaunching Adrenalin...', end='', flush=True)
     
     if is_app_running():
         print(' ERR: App already running, skipping launch')
@@ -142,51 +219,36 @@ def launch_app():
     print(' OK')
     def do_launch():
         subprocess.Popen([APP_PATH, "-disableshowonstart"],
-                       creationflags=0x08)  # needed for detaching
+                       creationflags=0x08)
     
     threading.Thread(target=do_launch, daemon=True).start()
-    last_trigger_time = time.time()
+    last_trigger_time=time.time()
 
 def hide_console():
-    kernel32 = ctypes.windll.kernel32
-    user32=ctypes.windll.user32
-    h = kernel32.GetConsoleWindow()
+    kernel32=ctypes.windll.kernel32
+    user32 = ctypes.windll.user32
+    h=kernel32.GetConsoleWindow()
     if h:
         user32.ShowWindow(h, 0)
 
 def show_console():
-    kernel32=ctypes.windll.kernel32
-    user32 = ctypes.windll.user32
-    h=kernel32.GetConsoleWindow()
+    kernel32 = ctypes.windll.kernel32
+    user32=ctypes.windll.user32
+    h = kernel32.GetConsoleWindow()
     if h:
         user32.ShowWindow(h, 9)
         user32.SetForegroundWindow(h)
 
 def monitor_console_window():
-    kernel32 = ctypes.windll.kernel32
-    user32 = ctypes.windll.user32
-    SW_MINIMIZE = 6
-    SW_HIDE = 0
-    
-    class WINDOWPLACEMENT(ctypes.Structure):
-        _fields_ = [
-            ("length", ctypes.c_uint),
-            ("flags", ctypes.c_uint),
-            ("showCmd", ctypes.c_uint),
-            ("ptMinPosition", wintypes.POINT),
-            ("ptMaxPosition", wintypes.POINT),
-            ("rcNormalPosition", wintypes.RECT)
-        ]
+    kernel32=ctypes.windll.kernel32
+    user32=ctypes.windll.user32
+    SW_HIDE=0
     
     while is_listening:
-        h = kernel32.GetConsoleWindow()
-        if h:
-            placement = WINDOWPLACEMENT()
-            placement.length = ctypes.sizeof(WINDOWPLACEMENT)
-            if user32.GetWindowPlacement(h, ctypes.byref(placement)):
-                if placement.showCmd == SW_MINIMIZE:
-                    user32.ShowWindow(h, SW_HIDE)
-        time.sleep(0.5)
+        h=kernel32.GetConsoleWindow()
+        if h and user32.IsIconic(h):
+            user32.ShowWindow(h, SW_HIDE)
+        time.sleep(0.1)
 
 def create_tray_icon():
     global tray_icon
@@ -194,7 +256,7 @@ def create_tray_icon():
     if not HAS_TRAY:
         return None
     
-    icon_path = os.path.join(SCRIPT_DIR, "icon.ico")
+    icon_path=os.path.join(SCRIPT_DIR, "etc/icon.ico")
     img = Image.open(icon_path)
     
     def on_start_click(icon, item):
@@ -205,26 +267,27 @@ def create_tray_icon():
     
     def on_quit_click(icon, item):
         global is_listening
-        is_listening = False
-        icon.visible=False
+        is_listening=False
+        icon.visible = False
         icon.stop()
         os._exit(0)
     
-    menu = pystray.Menu(
+    menu=pystray.Menu(
         pystray.MenuItem('Start Macro', on_start_click),
         pystray.MenuItem("Show Console", on_show_click, default=True),
         pystray.MenuItem('Quit', on_quit_click)
     )
     
-    icon=pystray.Icon("AdrenalinArm", img, 'Adrenalin Arm', menu)
-    tray_icon = icon
+    icon = pystray.Icon("AdrenalinArm", img, 'Adrenalin Arm', menu)
+    tray_icon=icon
     return icon
 
 def main():
+    init_vosk()
     hide_console()
-    icon = create_tray_icon()
+    icon=create_tray_icon()
     
-    listen_thread=threading.Thread(target=listen_for_speech, daemon=True)
+    listen_thread = threading.Thread(target=listen_for_speech, daemon=True)
     listen_thread.start()
     
     monitor_thread=threading.Thread(target=monitor_console_window, daemon=True)

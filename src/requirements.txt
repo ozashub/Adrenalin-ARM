@@ -1,5 +1,0 @@
-pystray
-pillow
-SpeechRecognition
-pyaudio
-rapidfuzz

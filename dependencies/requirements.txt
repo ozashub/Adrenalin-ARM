@@ -1,0 +1,6 @@
+pystray
+pillow
+SpeechRecognition
+pyaudio
+rapidfuzz
+vosk
