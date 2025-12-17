@@ -46,8 +46,11 @@ if not APP_PATH:
 
 def recognize_speech(audio):
     recognizer = sr.Recognizer()
-    text=recognizer.recognize_google(audio, language="en-US")
-    return text.lower().strip()
+    try:
+        text=recognizer.recognize_google(audio, language="en-US")
+        return text.lower().strip()
+    except (sr.UnknownValueError, sr.RequestError):
+        return None
 
 def matches_trigger_phrase(txt):
     if not txt or ("start" not in txt and "launch" not in txt):
@@ -77,7 +80,7 @@ def listen_for_speech():
     
     recognizer.energy_threshold = 300
     recognizer.dynamic_energy_threshold=True
-    recognizer.dynamic_energy_adjustment_damping = 0.15
+    recognizer.dynamic_energy_adjustment_damping = 0.5
     recognizer.dynamic_energy_ratio=1.5
     recognizer.pause_threshold = 0.8
     recognizer.phrase_threshold=0.3
@@ -95,7 +98,7 @@ def listen_for_speech():
         print(f' OK ({mic_name})')
         
         print('Calibrating microphone...', end='', flush=True)
-        recognizer.adjust_for_ambient_noise(mic, duration=2)
+        recognizer.adjust_for_ambient_noise(mic, duration=3)
         print(' OK')
         
         while is_listening:
