@@ -9,28 +9,21 @@ if %errorLevel% neq 0 (
 )
 
 echo.
-echo ==========================================
+echo =============================================
 echo  Startup Installer (runs run.bat at startup)
-echo ==========================================
+echo =============================================
 echo.
 
-set /p TARGET_DIR=Enter FULL path to the folder containing run.bat: 
+cd /d "%~dp0.."
 
-if not exist "%TARGET_DIR%" (
+if not exist "run.bat" (
     echo.
-    echo Folder does not exist.
+    echo run.bat was not found in: %CD%
     pause
     exit /b
 )
 
-if not exist "%TARGET_DIR%\run.bat" (
-    echo.
-    echo run.bat was not found in that folder.
-    pause
-    exit /b
-)
-
-set "TARGET_BAT=%TARGET_DIR%\run.bat"
+set "TARGET_BAT=%CD%\run.bat"
 set "TASK_NAME=Elevated_run_bat"
 
 echo.

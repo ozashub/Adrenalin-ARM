@@ -12,6 +12,7 @@ Voice-activated launcher for Adrenalin. Listens for trigger phrases and automati
 1. Extract or clone this repository to your desired location
 2. Run `build-dependencies.bat` to install required Python packages
 3. Run `run.bat` to start the macro.
+4. Run `install_startup.bat` inside of 'auto-startup' if you want the app to automatically open at startup as admin (no admin prompt needed).
 
 ## Usage
 
@@ -35,8 +36,7 @@ Right-click the tray icon to access:
 
 ## Startup Installation
 
-To run Adrenalin ARM automatically on Windows login, run `install_startup.bat` as administrator and provide the full path to the folder containing `run.bat`.
-
+To run Adrenalin ARM automatically on Windows login, run `install_startup.bat`, which can be found inside the auto-startup folder as administrator.
 ## Common Issues
 
 **Wrong microphone is being used**
