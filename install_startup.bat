@@ -10,7 +10,7 @@ if %errorLevel% neq 0 (
 
 echo.
 echo ==========================================
-echo  Elevated Startup Installer (run.bat)
+echo  Startup Installer (runs run.bat at startup)
 echo ==========================================
 echo.
 
@@ -38,7 +38,7 @@ echo Found: %TARGET_BAT%
 echo Creating scheduled task: %TASK_NAME%
 echo.
 
-:: basically just sets up auto run on login
+:: basically just sets up auto run on login w/ highest privelages
 schtasks /create ^
  /tn "%TASK_NAME%" ^
  /tr "\"%TARGET_BAT%\"" ^

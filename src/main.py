@@ -4,12 +4,13 @@ import subprocess
 import threading
 import time
 import ctypes
+from ctypes import wintypes
 import queue
 import winreg
 
 try:
     import pystray
-    from PIL import Image, ImageDraw
+    from PIL import Image
     HAS_TRAY = True
 except:
     HAS_TRAY=False
@@ -19,6 +20,8 @@ from rapidfuzz import fuzz
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 COOLDOWN_SECONDS=1.5
+
+# wsg chat, disclaimer: with the assist of Claude I was able to make this easily. Anything that looks odd is cause ts was written with AI however is fully functional. Edit how you want.
 
 tray_icon = None
 last_trigger_time=0.0
@@ -50,7 +53,8 @@ def matches_trigger_phrase(txt):
     if not txt or ("start" not in txt and "launch" not in txt):
         return False
     
-    triggers=[ # triggers, change how you want
+    # triggers, change how you want the macro to be triggered
+    triggers = [
         "start the macro",
         'start macro', 
         "launch macro",
@@ -60,7 +64,7 @@ def matches_trigger_phrase(txt):
     
     for trigger in triggers:
         score = fuzz.partial_ratio(txt, trigger)
-        if score >= 80:  # 80 seems best
+        if score >= 80:  # 80 seems best, lower = more false positives but is flexible on the triggers, higher = more strict
             print(f"[MATCH] '{txt}' ≈ '{trigger}' ({score})")
             return True
     
@@ -90,9 +94,9 @@ def listen_for_speech():
         
         print(f"Listening to: {mic_name}")
         
-        print('Calibrating mic')
+        print('Calibrating microphone...')
         recognizer.adjust_for_ambient_noise(mic, duration=2)
-        print("Calibrated.")
+        print("Calibrated microphone.")
         
         while is_listening:
             audio = recognizer.listen(mic, timeout=None, phrase_time_limit=10)
@@ -124,12 +128,12 @@ def launch_app():
     global last_trigger_time
     
     if is_app_running():
-        print("[DEBUG] App already running, skipping launch")
+        print("Launching Adrenalin... ERR: App already running, skipping launch")
         ctypes.windll.user32.MessageBeep(0x10)
         return
     
     def do_launch():
-        print('Macro launched')
+        print('Launching Adrenalin... OK')
         subprocess.Popen([APP_PATH, "-disableshowonstart"],
                        creationflags=0x08)  # needed for detaching
     
@@ -151,15 +155,40 @@ def show_console():
         user32.ShowWindow(h, 9)
         user32.SetForegroundWindow(h)
 
+def monitor_console_window():
+    kernel32 = ctypes.windll.kernel32
+    user32 = ctypes.windll.user32
+    SW_MINIMIZE = 6
+    SW_HIDE = 0
+    
+    class WINDOWPLACEMENT(ctypes.Structure):
+        _fields_ = [
+            ("length", ctypes.c_uint),
+            ("flags", ctypes.c_uint),
+            ("showCmd", ctypes.c_uint),
+            ("ptMinPosition", wintypes.POINT),
+            ("ptMaxPosition", wintypes.POINT),
+            ("rcNormalPosition", wintypes.RECT)
+        ]
+    
+    while is_listening:
+        h = kernel32.GetConsoleWindow()
+        if h:
+            placement = WINDOWPLACEMENT()
+            placement.length = ctypes.sizeof(WINDOWPLACEMENT)
+            if user32.GetWindowPlacement(h, ctypes.byref(placement)):
+                if placement.showCmd == SW_MINIMIZE:
+                    user32.ShowWindow(h, SW_HIDE)
+        time.sleep(0.5)
+
 def create_tray_icon():
     global tray_icon
     
     if not HAS_TRAY:
         return None
     
-    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-    draw=ImageDraw.Draw(img)
-    draw.ellipse((4, 4, 60, 60), fill=(30, 144, 255, 255))
+    icon_path = os.path.join(SCRIPT_DIR, "icon.ico")
+    img = Image.open(icon_path)
     
     def on_start_click(icon, item):
         launch_app()
@@ -190,6 +219,9 @@ def main():
     
     listen_thread=threading.Thread(target=listen_for_speech, daemon=True)
     listen_thread.start()
+    
+    monitor_thread=threading.Thread(target=monitor_console_window, daemon=True)
+    monitor_thread.start()
     
     if icon:
         icon.run()
