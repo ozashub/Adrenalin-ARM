@@ -62,7 +62,7 @@ def matches_trigger(txt):
     if len(txt.split()) < 2:
         return False
     
-    noise_words = {"the", "a", "and", "to", "is", "it", "that", "this", "for", "with"}
+    noise_words = {"the", "a", "and", "to", "is", "it", "that", "this", "for", "huh", "with"}
     if txt.lower() in noise_words:
         return False
     
