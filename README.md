@@ -25,7 +25,7 @@ The application listens for the following trigger phrases:
 - "fire up the macro"
 - "start adrenalin"
 
-When a trigger phrase is detected, Adrenalin will launch automatically if it is not already running.
+When a trigger phrase is detected, Adrenalin will launch automatically if it is not already running. You can change this how you want in the code.
 
 ## System Tray Menu
 

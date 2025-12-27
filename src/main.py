@@ -109,7 +109,7 @@ def listen_for_speech():
     rec = KaldiRecognizer(vosk_model, 16000)
     rec.SetWords(False)
     
-    print('Status... OK: Listening')
+    print('Status... OK')
     
     while is_listening:
         data = stream.read(4000, exception_on_overflow=False)
@@ -215,7 +215,6 @@ def create_tray_icon():
 
 def main():
     init_vosk()
-    hide_console()
     icon=create_tray_icon()
     
     listen_thread = threading.Thread(target=listen_for_speech, daemon=True)

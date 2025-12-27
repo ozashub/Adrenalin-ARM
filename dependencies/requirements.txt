@@ -1,5 +1,6 @@
 pystray
 pillow
+wheel
 SpeechRecognition
 pyaudio
 rapidfuzz
